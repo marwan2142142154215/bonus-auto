@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scraper Otomatis - Login Google</title>
+    <link rel="stylesheet" href="/style.css">
+    <!-- Firebase SDK compat (bukan module) -->
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.5.0/firebase-auth-compat.js"></script>
+</head>
+<body>
+    <div id="login-container" class="container">
+        <div class="card">
+            <h2>🔐 Login dengan Google</h2>
+            <button id="google-login" class="btn primary">Login dengan Google</button>
+        </div>
+    </div>
+
+    <div id="app-container" class="container" style="display:none;">
+        <header>
+            <h1>🚀 Scraper Otomatis</h1>
+            <div class="user-info">
+                <span id="user-email"></span>
+                <button id="logout" class="btn small">Logout</button>
+            </div>
+        </header>
+
+        <!-- Pengaturan URL Admin (bisa diubah) -->
+        <div class="card">
+            <h3>⚙️ Pengaturan</h3>
+            <div class="form-group">
+                <label>URL Dasar Admin</label>
+                <input type="text" id="adminUrlSetting" placeholder="https://agent.png777.com">
+                <button id="saveAdminUrlBtn" class="btn small" style="margin-top: 8px;">Simpan URL</button>
+                <p class="hint">URL ini akan digunakan untuk membuka halaman transaksi. Simpan akan mempengaruhi proses scraping selanjutnya.</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>📥 Input Tiket</h3>
+            <div class="form-group">
+                <label>User ID</label>
+                <input type="text" id="userId" placeholder="Contoh: 123456">
+            </div>
+            <div class="form-group">
+                <label>Kode Tiket (Tx ID)</label>
+                <input type="text" id="ticketCode" placeholder="Contoh: 2025...">
+            </div>
+            <div class="form-group">
+                <label>Betting (opsional)</label>
+                <input type="text" id="betting" placeholder="Contoh: 200">
+            </div>
+            <div class="form-group">
+                <label>Multi input (satu baris per tiket: userId,txId,betting)</label>
+                <textarea id="bulk" rows="4" placeholder="Contoh:
+123456,202501010001,200
+789012,202501010002,"></textarea>
+            </div>
+            <button id="sendBtn" class="btn primary">Kirim & Cek</button>
+            <p id="status" class="status"></p>
+        </div>
+
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h3>📊 Hasil Pengecekan</h3>
+                <div>
+                    <button id="copyBtn" class="btn small">Salin TSV</button>
+                    <button id="clearBtn" class="btn small danger">Hapus Semua</button>
+                </div>
+            </div>
+            <div class="table-wrapper">
+                <table id="results-table">
+                    <thead>
+                        <tr><th>User ID</th><th>Tx ID</th><th>Debet</th><th>Scatter</th><th>Status Cek</th><th>BONUSSMB</th></tr>
+                    </thead>
+                    <tbody id="resultBody">
+                        <tr><td colspan="6">Belum ada data</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Konfigurasi Firebase (dari milik Anda)
+        const firebaseConfig = {
+            apiKey: "AIzaSyCxUXvOfAX-chK4JE5ABweXUMoP7S7df6M",
+            authDomain: "bonus-auto.firebaseapp.com",
+            projectId: "bonus-auto",
+            storageBucket: "bonus-auto.firebasestorage.app",
+            messagingSenderId: "482822448352",
+            appId: "1:482822448352:web:8deaab9162e3e028e09c85",
+            measurementId: "G-TXFZJ5BQFP"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const provider = new firebase.auth.GoogleAuthProvider();
+
+        // DOM elements
+        const loginDiv = document.getElementById('login-container');
+        const appDiv = document.getElementById('app-container');
+        const userEmailSpan = document.getElementById('user-email');
+        const statusP = document.getElementById('status');
+        const resultBody = document.getElementById('resultBody');
+        const userIdInput = document.getElementById('userId');
+        const ticketCodeInput = document.getElementById('ticketCode');
+        const bettingInput = document.getElementById('betting');
+        const bulkTextarea = document.getElementById('bulk');
+        const sendBtn = document.getElementById('sendBtn');
+        const copyBtn = document.getElementById('copyBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const logoutBtn = document.getElementById('logout');
+        const adminUrlSetting = document.getElementById('adminUrlSetting');
+        const saveAdminUrlBtn = document.getElementById('saveAdminUrlBtn');
+
+        let currentToken = null;
+
+        // Helper: panggil API dengan token
+        async function apiRequest(endpoint, options = {}) {
+            if (!currentToken) throw new Error('Not authenticated');
+            const res = await fetch(endpoint, {
+                ...options,
+                headers: {
+                    'Authorization': `Bearer ${currentToken}`,
+                    'Content-Type': 'application/json',
+                    ...options.headers
+                }
+            });
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(text || res.statusText);
+            }
+            return res.json();
+        }
+
+        function setStatus(msg, isError = false) {
+            statusP.textContent = msg;
+            statusP.style.color = isError ? '#ff6b6b' : '#aaa';
+            setTimeout(() => { if (statusP.textContent === msg) statusP.textContent = ''; }, 5000);
+        }
+
+        function escapeHtml(str) { return String(str).replace(/[&<>]/g, function(m){if(m==='&') return '&amp;'; if(m==='<') return '&lt;'; if(m==='>') return '&gt;'; return m;}); }
+
+        function renderResults(results) {
+            if (!results || results.length === 0) {
+                resultBody.innerHTML = '<tr><td colspan="6">Belum ada data</td></tr>';
+                return;
+            }
+            let html = '';
+            for (const r of results) {
+                const statusClass = (r.statusCek === 'Sukses cek') ? 'success' : 'error';
+                html += `<tr>
+                    <td>${escapeHtml(r.userId)}</td>
+                    <td>${escapeHtml(r.transactionId)}</td>
+                    <td>${escapeHtml(r.debetValue || '')}</td>
+                    <td>${escapeHtml(r.scatterTitle || '')}</td>
+                    <td class="${statusClass}">${escapeHtml(r.statusCek || 'Pending')}</td>
+                    <td>${escapeHtml(r.bonussmbStatus || '')}</td>
+                </tr>`;
+            }
+            resultBody.innerHTML = html;
+        }
+
+        async function loadResults() {
+            try {
+                const data = await apiRequest('/api/results');
+                renderResults(data);
+            } catch(err) {
+                console.error(err);
+                setStatus('Gagal memuat hasil', true);
+            }
+        }
+
+        async function postQueue(txQueue) {
+            try {
+                const resp = await apiRequest('/api/queue', { method: 'POST', body: JSON.stringify({ txQueue }) });
+                setStatus(`✅ Antrian diterima. ${resp.count} tiket diproses.`);
+                setTimeout(loadResults, 3000);
+            } catch(err) {
+                setStatus('❌ Gagal mengirim antrian: ' + err.message, true);
+            }
+        }
+
+        function parseBulk(text) {
+            const lines = text.split(/\r?\n/);
+            const tickets = [];
+            for (let line of lines) {
+                line = line.trim();
+                if (!line) continue;
+                const parts = line.split(',').map(s => s.trim());
+                if (parts.length < 2) continue;
+                const userId = parts[0];
+                const transactionId = parts[1];
+                const betting = parts[2] || '';
+                if (userId && transactionId) {
+                    tickets.push({ userId, transactionId, betting });
+                }
+            }
+            return tickets;
+        }
+
+        // Simpan URL Admin ke localStorage dan (jika perlu) kirim ke backend untuk update env? 
+        // Karena backend membaca dari env, kita tidak bisa ubah runtime tanpa restart. 
+        // Tapi kita bisa simpan di localStorage dan gunakan untuk frontend saja? 
+        // Sebenarnya backend membutuhkan ADMIN_URL untuk scraping. Jadi kita perlu backend bisa mengubahnya.
+        // Solusi: tambahkan API endpoint untuk mengatur ADMIN_URL di memory (sementara) atau simpan di database.
+        // Untuk kemudahan, kita akan simpan di localStorage dan juga kirim ke backend melalui API /api/set-admin-url.
+        // Namun di server.js kita belum buat endpoint itu. Saya akan tambahkan di server.js nanti.
+        // Untuk sementara, kita hanya simpan di localStorage dan beri tahu user bahwa perlu restart? 
+        // Lebih baik kita buat endpoint di server.js untuk mengupdate ADMIN_URL secara dinamis (di memory). 
+        // Saya akan tambahkan di server.js endpoint /api/admin-url (GET dan POST).
+        
+        // Karena kita sudah punya GET /api/admin-url, kita akan buat POST /api/admin-url untuk mengupdate.
+        // Tapi kita perlu mengubah scraper.js agar bisa mengupdate variabel ADMIN_URL. 
+        // Saya sudah tambahkan fungsi setAdminUrl di scraper.js. Kita panggil dari server.js.
+        
+        // Untuk sementara, kita implementasikan di frontend: simpan ke localStorage, dan kirim ke backend via POST.
+        
+        async function loadAdminUrlSetting() {
+            const saved = localStorage.getItem('adminUrl');
+            if (saved) {
+                adminUrlSetting.value = saved;
+            } else {
+                // Ambil dari backend (default env)
+                try {
+                    const data = await apiRequest('/api/admin-url');
+                    adminUrlSetting.value = data.adminUrl;
+                    localStorage.setItem('adminUrl', data.adminUrl);
+                } catch(e) {}
+            }
+        }
+        
+        async function saveAdminUrl() {
+            const newUrl = adminUrlSetting.value.trim();
+            if (!newUrl) return;
+            localStorage.setItem('adminUrl', newUrl);
+            // Kirim ke backend agar scraper menggunakan URL baru
+            try {
+                await apiRequest('/api/admin-url', { method: 'POST', body: JSON.stringify({ adminUrl: newUrl }) });
+                setStatus('✅ URL Admin berhasil diupdate. Proses scraping berikutnya akan menggunakan URL baru.');
+            } catch(err) {
+                setStatus('❌ Gagal menyimpan URL Admin di server: ' + err.message, true);
+            }
+        }
+        
+        saveAdminUrlBtn.onclick = saveAdminUrl;
+        
+        sendBtn.onclick = () => {
+            const bulkText = bulkTextarea.value.trim();
+            if (bulkText) {
+                const tickets = parseBulk(bulkText);
+                if (tickets.length === 0) {
+                    setStatus('⚠️ Format bulk salah. Gunakan userId,txId,betting per baris', true);
+                    return;
+                }
+                postQueue(tickets);
+            } else {
+                const userId = userIdInput.value.trim();
+                const txId = ticketCodeInput.value.trim();
+                if (!userId || !txId) {
+                    setStatus('⚠️ Isi User ID dan Kode Tiket atau gunakan Multi input', true);
+                    return;
+                }
+                const betting = bettingInput.value.trim();
+                postQueue([{ userId, transactionId: txId, betting }]);
+            }
+        };
+
+        copyBtn.onclick = async () => {
+            try {
+                const results = await apiRequest('/api/results');
+                if (results.length === 0) {
+                    setStatus('Tidak ada data untuk disalin', true);
+                    return;
+                }
+                let tsv = 'User ID\tTx ID\tDebet\tScatter\tStatus Cek\tBONUSSMB\n';
+                for (const r of results) {
+                    tsv += `${r.userId}\t${r.transactionId}\t${r.debetValue || ''}\t${r.scatterTitle || ''}\t${r.statusCek || ''}\t${r.bonussmbStatus || ''}\n`;
+                }
+                await navigator.clipboard.writeText(tsv);
+                setStatus(`📋 ${results.length} baris disalin ke clipboard`);
+            } catch(err) {
+                setStatus('Gagal menyalin', true);
+            }
+        };
+
+        clearBtn.onclick = async () => {
+            if (confirm('Hapus semua antrian dan hasil? Tindakan ini tidak bisa dibatalkan.')) {
+                try {
+                    await apiRequest('/api/clear', { method: 'DELETE' });
+                    setStatus('Data berhasil dihapus');
+                    loadResults();
+                } catch(err) {
+                    setStatus('Gagal menghapus', true);
+                }
+            }
+        };
+
+        // Login
+        document.getElementById('google-login').onclick = () => {
+            auth.signInWithPopup(provider).then(result => onLoginSuccess(result.user)).catch(err => {
+                console.error(err);
+                setStatus('Login gagal: ' + err.message, true);
+            });
+        };
+
+        function onLoginSuccess(user) {
+            loginDiv.style.display = 'none';
+            appDiv.style.display = 'block';
+            userEmailSpan.textContent = user.email;
+            user.getIdToken().then(token => {
+                currentToken = token;
+                loadAdminUrlSetting();
+                loadResults();
+            });
+        }
+
+        logoutBtn.onclick = () => {
+            auth.signOut().then(() => {
+                loginDiv.style.display = 'block';
+                appDiv.style.display = 'none';
+                currentToken = null;
+            });
+        };
+
+        auth.onAuthStateChanged(user => {
+            if (user) onLoginSuccess(user);
+            else {
+                loginDiv.style.display = 'block';
+                appDiv.style.display = 'none';
+                currentToken = null;
+            }
+        });
+    </script>
+</body>
+</html>
