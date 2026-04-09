@@ -1,16 +1,8 @@
 const puppeteer = require('puppeteer');
 
-// Variabel admin url yang bisa diubah runtime
 let ADMIN_URL = process.env.ADMIN_URL || 'https://agent.png777.com';
-
-// Fungsi untuk mengupdate admin url dari server
-function setAdminUrl(url) {
-  ADMIN_URL = url;
-  console.log(`[Scraper] Admin URL updated to: ${ADMIN_URL}`);
-}
-
-// Header tambahan dari environment (opsional)
 let AGENT_HEADERS = {};
+
 if (process.env.AGENT_HEADERS) {
   try {
     AGENT_HEADERS = JSON.parse(process.env.AGENT_HEADERS);
@@ -19,26 +11,63 @@ if (process.env.AGENT_HEADERS) {
   }
 }
 
+function setAdminUrl(url) {
+  ADMIN_URL = url;
+  console.log(`[Scraper] Admin URL updated to: ${ADMIN_URL}`);
+}
+
 async function scrapeTransaction(userId, transactionId, expectedBetting) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
+  let browser = null;
+  const timeout = 45000; // 45 seconds timeout
+  
   try {
+    console.log(`[Scraper] Starting scrape for ${userId}/${transactionId}`);
+    
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox', 
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--window-size=1920,1080'
+      ],
+      timeout: timeout
+    });
+    
     const page = await browser.newPage();
-    await page.setExtraHTTPHeaders(AGENT_HEADERS);
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setDefaultNavigationTimeout(timeout);
+    await page.setDefaultTimeout(timeout);
+    
+    if (Object.keys(AGENT_HEADERS).length > 0) {
+      await page.setExtraHTTPHeaders(AGENT_HEADERS);
+    }
     
     const url = `${ADMIN_URL}/transaction-record.html`;
     console.log(`[Scraper] Browsing to: ${url}`);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
     
-    // Isi form
-    await page.type('[name="userId"]', userId, { delay: 50 });
-    await page.type('[name="transactionId"]', transactionId, { delay: 50 });
-    await page.click('.success-button.langWord.jq-after-search');
-    await page.waitForSelector('tbody tr', { timeout: 15000 });
+    await page.goto(url, { 
+      waitUntil: 'domcontentloaded', 
+      timeout: timeout 
+    });
     
-    // Ekstrak data dari baris tabel
+    // Isi form dengan lebih hati-hati
+    await page.waitForSelector('[name="userId"]', { timeout: 10000 });
+    await page.type('[name="userId"]', userId, { delay: 30 });
+    await page.type('[name="transactionId"]', transactionId, { delay: 30 });
+    
+    // Click search button
+    await Promise.all([
+      page.click('.success-button.langWord.jq-after-search'),
+      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: timeout }).catch(() => {})
+    ]);
+    
+    // Wait for results
+    await page.waitForSelector('tbody tr', { timeout: 15000 }).catch(() => null);
+    
+    // Ekstrak data
     const rowData = await page.evaluate((txId) => {
       const rows = document.querySelectorAll('tbody tr');
       for (let row of rows) {
@@ -61,19 +90,22 @@ async function scrapeTransaction(userId, transactionId, expectedBetting) {
     }
     
     // Buka halaman detail
-    let detailPage;
     let detailUrl = rowData.href;
     if (!detailUrl && rowData.gameName) {
       const shortId = transactionId.slice(0,19);
       detailUrl = `https://public.u2uyu876x.com/history/${rowData.gameName}.html?psid=${shortId}&sid=${shortId}&api=public-api.u2uyu876x.com%252Fweb-api%252Foperator-proxy%252Fv1%252FHistory%252FGetBetHistory&lang=en`;
     }
+    
     if (!detailUrl) {
       throw new Error('Tidak ada link detail atau game name');
     }
-    detailPage = await browser.newPage();
-    await detailPage.goto(detailUrl, { waitUntil: 'networkidle2', timeout: 20000 });
     
-    // Ekstrak scatter
+    const detailPage = await browser.newPage();
+    await detailPage.goto(detailUrl, { 
+      waitUntil: 'domcontentloaded', 
+      timeout: 20000 
+    });
+    
     const scatterResult = await detailPage.evaluate(() => {
       const scatterEl = document.querySelector('.sprite-symbol.payout_scatter');
       if (scatterEl) {
@@ -91,8 +123,12 @@ async function scrapeTransaction(userId, transactionId, expectedBetting) {
       return { found: false, title: 'Scatter tidak ditemukan', count: '' };
     });
     
+    await detailPage.close();
+    
     const statusCek = scatterResult.found ? 'Sukses cek' : 'Cek gagal';
     const bonussmbStatus = statusCek === 'Sukses cek' ? 'Pending input' : '';
+    
+    console.log(`[Scraper] Success for ${userId}/${transactionId}: ${statusCek}`);
     
     return {
       userId,
@@ -103,19 +139,22 @@ async function scrapeTransaction(userId, transactionId, expectedBetting) {
       bonussmbStatus,
       detail: ''
     };
+    
   } catch (err) {
     console.error(`Scrape error for ${userId}/${transactionId}:`, err.message);
     return {
       userId,
       transactionId,
       debetValue: 'N/A',
-      scatterTitle: `Error: ${err.message}`,
+      scatterTitle: `Error: ${err.message.substring(0, 100)}`,
       statusCek: 'Cek gagal',
       bonussmbStatus: '',
       detail: err.message
     };
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close().catch(console.error);
+    }
   }
 }
 
