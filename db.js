@@ -30,15 +30,18 @@ async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
     CREATE INDEX IF NOT EXISTS idx_results_userId ON results(userId);
+    CREATE INDEX IF NOT EXISTS idx_results_updated ON results(updatedAt DESC);
   `);
+  console.log('Database tables created/verified');
 }
 
 async function addToQueue(tickets) {
-  const insert = db.prepare(`INSERT INTO queue (userId, transactionId, betting) VALUES (?, ?, ?)`);
+  const insert = await db.prepare(`INSERT INTO queue (userId, transactionId, betting) VALUES (?, ?, ?)`);
   for (const t of tickets) {
     await insert.run(t.userId, t.transactionId, t.betting || '');
   }
   await insert.finalize();
+  console.log(`Added ${tickets.length} tickets to queue`);
 }
 
 async function getQueue() {
@@ -69,6 +72,7 @@ async function getResults() {
 async function clearAll() {
   await db.run(`DELETE FROM queue`);
   await db.run(`DELETE FROM results`);
+  console.log('All data cleared');
 }
 
 module.exports = { initDb, addToQueue, getQueue, getQueueStatus, markQueueProcessed, updateResult, getResults, clearAll };
