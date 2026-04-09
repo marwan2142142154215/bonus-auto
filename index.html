@@ -83,7 +83,6 @@
     </div>
 
     <script>
-        // Konfigurasi Firebase (dari milik Anda)
         const firebaseConfig = {
             apiKey: "AIzaSyCxUXvOfAX-chK4JE5ABweXUMoP7S7df6M",
             authDomain: "bonus-auto.firebaseapp.com",
@@ -97,7 +96,6 @@
         const auth = firebase.auth();
         const provider = new firebase.auth.GoogleAuthProvider();
 
-        // DOM elements
         const loginDiv = document.getElementById('login-container');
         const appDiv = document.getElementById('app-container');
         const userEmailSpan = document.getElementById('user-email');
@@ -116,7 +114,6 @@
 
         let currentToken = null;
 
-        // Helper: panggil API dengan token
         async function apiRequest(endpoint, options = {}) {
             if (!currentToken) throw new Error('Not authenticated');
             const res = await fetch(endpoint, {
@@ -200,29 +197,11 @@
             return tickets;
         }
 
-        // Simpan URL Admin ke localStorage dan (jika perlu) kirim ke backend untuk update env? 
-        // Karena backend membaca dari env, kita tidak bisa ubah runtime tanpa restart. 
-        // Tapi kita bisa simpan di localStorage dan gunakan untuk frontend saja? 
-        // Sebenarnya backend membutuhkan ADMIN_URL untuk scraping. Jadi kita perlu backend bisa mengubahnya.
-        // Solusi: tambahkan API endpoint untuk mengatur ADMIN_URL di memory (sementara) atau simpan di database.
-        // Untuk kemudahan, kita akan simpan di localStorage dan juga kirim ke backend melalui API /api/set-admin-url.
-        // Namun di server.js kita belum buat endpoint itu. Saya akan tambahkan di server.js nanti.
-        // Untuk sementara, kita hanya simpan di localStorage dan beri tahu user bahwa perlu restart? 
-        // Lebih baik kita buat endpoint di server.js untuk mengupdate ADMIN_URL secara dinamis (di memory). 
-        // Saya akan tambahkan di server.js endpoint /api/admin-url (GET dan POST).
-        
-        // Karena kita sudah punya GET /api/admin-url, kita akan buat POST /api/admin-url untuk mengupdate.
-        // Tapi kita perlu mengubah scraper.js agar bisa mengupdate variabel ADMIN_URL. 
-        // Saya sudah tambahkan fungsi setAdminUrl di scraper.js. Kita panggil dari server.js.
-        
-        // Untuk sementara, kita implementasikan di frontend: simpan ke localStorage, dan kirim ke backend via POST.
-        
         async function loadAdminUrlSetting() {
             const saved = localStorage.getItem('adminUrl');
             if (saved) {
                 adminUrlSetting.value = saved;
             } else {
-                // Ambil dari backend (default env)
                 try {
                     const data = await apiRequest('/api/admin-url');
                     adminUrlSetting.value = data.adminUrl;
@@ -235,12 +214,11 @@
             const newUrl = adminUrlSetting.value.trim();
             if (!newUrl) return;
             localStorage.setItem('adminUrl', newUrl);
-            // Kirim ke backend agar scraper menggunakan URL baru
             try {
                 await apiRequest('/api/admin-url', { method: 'POST', body: JSON.stringify({ adminUrl: newUrl }) });
-                setStatus('✅ URL Admin berhasil diupdate. Proses scraping berikutnya akan menggunakan URL baru.');
+                setStatus('✅ URL Admin berhasil diupdate.');
             } catch(err) {
-                setStatus('❌ Gagal menyimpan URL Admin di server: ' + err.message, true);
+                setStatus('❌ Gagal menyimpan URL Admin: ' + err.message, true);
             }
         }
         
@@ -297,7 +275,6 @@
             }
         };
 
-        // Login
         document.getElementById('google-login').onclick = () => {
             auth.signInWithPopup(provider).then(result => onLoginSuccess(result.user)).catch(err => {
                 console.error(err);
